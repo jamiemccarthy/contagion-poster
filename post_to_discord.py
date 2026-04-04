@@ -243,8 +243,9 @@ def pick_latest_complete_week(weeks):
 
     The NHSN dataset tracks how many hospitals submitted data for each week.
     The most recent week often has low reporting because hospitals haven't
-    all submitted yet. Final data publishes Fridays; our script runs Mondays,
-    so typically the second-most-recent week is the first complete one.
+    all submitted yet. Final data publishes Fridays around 14:00 UTC; our
+    script runs Fridays at 16:00 UTC, so the most recent week may or may
+    not be complete depending on whether CDC has published yet.
     """
     for i, week in enumerate(weeks):
         if week["reporting_pct"] >= REPORTING_COMPLETENESS_THRESHOLD:
@@ -422,6 +423,7 @@ def main():
     data = fetch_data()
     message = format_message(data)
     print(message)
+    post_to_discord(message)
 
 
 if __name__ == "__main__":

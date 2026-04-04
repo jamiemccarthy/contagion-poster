@@ -35,15 +35,15 @@ Single-file Python script (`post_to_discord.py`) with three-stage pipeline:
 2. `format_message()` - Transforms data into Discord message content
 3. `post_to_discord()` - Sends message via Discord webhook
 
-GitHub Actions workflow (`.github/workflows/weekly-post.yml`) runs every Monday at 14:00 UTC.
+GitHub Actions workflow (`.github/workflows/weekly-post.yml`) runs every Friday at 16:00 UTC (noon Eastern), after CDC NHSN data typically publishes (~14:00 UTC).
 
-See `README.md` for resource list.
+See `README.md` and `DATA_SOURCES.md` for data source details.
 
 ## Status / Next Steps
 
 - [x] Scaffold script and GitHub Actions workflow
 - [x] Create Discord webhook and verify posting works
-- [ ] Implement `fetch_data()` with real CDC data (respiratory virus activity levels covers flu/COVID/RSV)
-- [ ] Implement `format_message()` to produce a useful Discord message
-- [ ] Store webhook URL as GitHub secret `DISCORD_WEBHOOK_URL`
-- [ ] Support CLI args for local testing against a different webhook/channel
+- [x] Implement real CDC data fetching (wastewater, ED visits, hospital admissions)
+- [x] Implement format_message() with concern-level classification
+- [x] Store webhook URL as GitHub secret `DISCORD_WEBHOOK_URL`
+- [ ] Refine message format for readability
