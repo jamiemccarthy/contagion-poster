@@ -1,10 +1,25 @@
 # Data Sources
 
+## Comparison
+
+As of 2026-04-04, all three sources report data through the week ending 2026-03-28.
+
+| Source | Diseases | Geography | What it measures | Freshness | Notes |
+|---|---|---|---|---|---|
+| Wastewater (NWSS) | COVID, Flu, RSV | State (DC, MD, VA) | Categorical activity level (Very Low–Very High) | Updated Fridays, ~5 day lag | Undocumented CDC endpoints; stable in practice |
+| ED Visits (NSSP) | COVID, Flu, RSV | County | % of ED visits + trend direction | Updated weekly, ~7 day lag | Official Socrata API; can filter to specific DMV counties |
+| Hospital Admissions (NHSN) | COVID, Flu, RSV | State (DC, MD, VA) | Confirmed new admissions per 100k population | Updated weekly, ~7 day lag | Official Socrata API |
+
+**Tradeoffs:**
+- Wastewater is the earliest signal (detects community spread before people show up at hospitals) but only at state level
+- ED visits are county-level, so we can focus on the DC metro area specifically, but they lag wastewater
+- Hospital admissions show severity but are state-wide (includes all of VA/MD, not just DMV)
+
 ## In Use
 
 ### CDC Wastewater Viral Activity Levels (NWSS)
 
-Undocumented JSON endpoints that power the CDC NWSS dashboard. Return state-by-state Wastewater Viral Activity Level (WVAL) categories: Very Low / Low / Moderate / High / Very High. Updated weekly on Fridays. All share an identical schema.
+Undocumented JSON endpoints that power the CDC NWSS dashboard. Return state-by-state Wastewater Viral Activity Level (WVAL) categories: Very Low / Low / Moderate / High / Very High. Updated weekly on Fridays.
 
 | Virus | URL |
 |---|---|
@@ -30,35 +45,54 @@ Notes:
 - The Bluesky bot `covid-wastewater.bsky.social` uses these same endpoints (source: https://github.com/EricWVGG/covid-wastewater-bluesky), suggesting they are stable enough for a weekly bot
 - These are undocumented internal CDC endpoints and could change without notice
 
-## Evaluated But Not Used
-
-### data.cdc.gov Socrata API — Lab Test Positivity (NREVSS)
-
-Official documented Socrata/SODA API. Returns percent positivity from clinical lab testing, by HHS Region and National level. No API key required.
-
-| Dataset | Socrata ID | Endpoint |
-|---|---|---|
-| COVID-19 percent positivity | `gvsb-yw6g` | `https://data.cdc.gov/resource/gvsb-yw6g.json` |
-| RSV percent positivity | `3cxc-4k8q` | `https://data.cdc.gov/resource/3cxc-4k8q.json` |
-| All respiratory viruses (NREVSS) | `rgnm-fkqb` | `https://data.cdc.gov/resource/rgnm-fkqb.json` |
-
-Notes:
-- The all-viruses dataset (`rgnm-fkqb`) covers SARS-CoV-2, RSV, Adenovirus, HCOV, HMPV, PIV, RV/EV but **not Influenza**
-- Data is by HHS Region, not by state — less granular for DMV purposes
-- Supports SoQL queries for filtering
-
-### data.cdc.gov Socrata API — ED Visit Trajectories (NSSP)
+### NSSP ED Visit Trajectories
 
 | Dataset | Socrata ID | Endpoint |
 |---|---|---|
 | NSSP ED Visit Trajectories | `rdmq-nq56` | `https://data.cdc.gov/resource/rdmq-nq56.json` |
 
-Covers COVID, flu, and RSV in one dataset with fields like `percent_visits_covid`, `percent_visits_influenza`, `percent_visits_rsv` and trend indicators. However, it is **county-level only** with no national or state rollups — would need manual aggregation.
+Covers COVID, flu, and RSV in one dataset. County-level data for DC, MD, VA confirmed available. Key fields: `week_end`, `geography`, `county`, `percent_visits_covid`, `percent_visits_influenza`, `percent_visits_rsv`, `ed_trends_covid`, `ed_trends_influenza`, `ed_trends_rsv` (trends: "Increasing"/"Decreasing"/"No Change"). No API key required.
+
+DMV counties to query:
+- **DC:** District of Columbia
+- **MD:** Prince Georges, Montgomery, Charles, Anne Arundel, Howard, Frederick
+- **VA:** Arlington, Fairfax, Fairfax City, Falls Church City, Loudoun, Prince William, Alexandria City
+
+Example query:
+```
+https://data.cdc.gov/resource/rdmq-nq56.json?$where=geography in('District of Columbia','Maryland','Virginia')&$order=week_end DESC&$limit=10
+```
+
+### NHSN Hospital Admissions
+
+| Dataset | Socrata ID | Endpoint |
+|---|---|---|
+| Weekly Hospital Respiratory Data (final) | `ua7e-t2fy` | `https://data.cdc.gov/resource/ua7e-t2fy.json` |
+| Weekly Hospital Respiratory Data (preliminary) | `mpgq-jmmr` | `https://data.cdc.gov/resource/mpgq-jmmr.json` |
+
+State-level confirmed hospital admissions for COVID, flu, and RSV in DC, MD, VA. Key fields: `weekendingdate`, `jurisdiction`, `totalconfc19newadmper100k`, `totalconfflunewadmper100k`, `totalconfrsvnewadmper100k` (new hospital admissions per 100,000 population during the reporting week). No API key required.
+
+**Reporting completeness:** Each record includes `totalconfc19newadmperchosprep` (and flu/RSV equivalents) — the % of hospitals in that jurisdiction that reported for that week. There are also binary flags like `totalconfc19newadmperchosprepabove80pct` (1 if >80% reported). The most recent week typically has low reporting because not all hospitals have submitted yet.
+
+**Update cadence:** Reporting weeks run Sunday–Saturday. Preliminary data (`mpgq-jmmr`) publishes the following Wednesday. Final data (`ua7e-t2fy`) publishes the following Friday — observed at ~14:00 UTC (10:00 AM Eastern) on 2026-04-03, but this may vary. If the script runs before the update lands, the "(latest complete)" label in the output will reflect the prior week.
+
+**DC structural under-reporting:** DC only has ~11 hospitals and consistently reports around 73% even for older weeks — this appears to be non-participating hospitals, not a lag. MD and VA reach 78–93% for completed weeks. We average reporting % across DC+MD+VA and require ≥80% to consider a week complete; this typically means skipping the most recent week and using the one before it.
+
+Example query:
+```
+https://data.cdc.gov/resource/ua7e-t2fy.json?$where=jurisdiction in('DC','MD','VA')&$order=weekendingdate DESC&$limit=10
+```
+
+## Evaluated But Not Used
+
+### data.cdc.gov Socrata API — Lab Test Positivity (NREVSS)
+
+Percent positivity from clinical lab testing, by HHS Region. Covers SARS-CoV-2, RSV, Adenovirus, HCOV, HMPV, PIV, RV/EV but **not Influenza**. Region-level only (not state/county), so less useful for DMV. Socrata IDs: `gvsb-yw6g`, `3cxc-4k8q`, `rgnm-fkqb`.
 
 ### data.cdc.gov — Combined Wastewater Dataset
 
-Dataset `atcp-73re` (Wastewater Viral Activity Level for SARS-CoV-2, Influenza A and RSV) exists on data.cdc.gov but returns 403 — not publicly accessible.
+Dataset `atcp-73re` exists on data.cdc.gov but returns 403 — not publicly accessible.
 
 ### Bluesky Bot
 
-The account `covid-wastewater.bsky.social` posts COVID wastewater levels every Friday. Fetchable without auth via the public Bluesky API. However, only covers COVID (not flu/RSV), and requires parsing emoji-formatted text. Better to use the same CDC JSON endpoints directly.
+`covid-wastewater.bsky.social` posts COVID wastewater levels every Friday. Only covers COVID (not flu/RSV), and requires parsing emoji text. Better to use the CDC JSON endpoints directly.
