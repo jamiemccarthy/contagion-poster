@@ -5,7 +5,7 @@ from collections import defaultdict
 import requests
 
 
-DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 DMV_STATES = {"DC", "MD", "VA"}
 
@@ -558,7 +558,10 @@ def main():
     data = fetch_data()
     message = format_message(data, detail=args.detail)
     print(message)
-    post_to_discord(message)
+    if DISCORD_WEBHOOK_URL:
+        post_to_discord(message)
+    else:
+        print("(no DISCORD_WEBHOOK_URL set — skipping Discord post)")
 
 
 if __name__ == "__main__":
