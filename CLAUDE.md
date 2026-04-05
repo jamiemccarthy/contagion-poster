@@ -24,26 +24,17 @@ DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/YOUR_SECRET' python post_t
 
 ## Discord
 
-- Webhook URL (Jamie's test server): `https://discord.com/api/webhooks/YOUR_SECRET`
+- Webhook URL: `https://discord.com/api/webhooks/YOUR_SECRET`
 - Webhooks are channel-specific — no separate guild/channel ID needed
 - The webhook URL is the only secret; it must be stored as `DISCORD_WEBHOOK_URL` in GitHub repo secrets for the Actions workflow
 
 ## Architecture
 
 Single-file Python script (`post_to_discord.py`) with three-stage pipeline:
-1. `fetch_data()` - Retrieves data from external source (currently returns placeholder)
+1. `fetch_data()` - Retrieves data from external sources
 2. `format_message()` - Transforms data into Discord message content
 3. `post_to_discord()` - Sends message via Discord webhook
 
-GitHub Actions workflow (`.github/workflows/weekly-post.yml`) runs every Friday at 16:00 UTC (noon Eastern), after CDC NHSN data typically publishes (~14:00 UTC).
+GitHub Actions workflow (`.github/workflows/weekly-post.yml`) runs every Friday at 16:00 UTC (noon Eastern), after CDC NHSN data typically publishes in the morning (observed ~14:00 UTC, but timing may vary).
 
-See `README.md` and `DATA_SOURCES.md` for data source details.
-
-## Status / Next Steps
-
-- [x] Scaffold script and GitHub Actions workflow
-- [x] Create Discord webhook and verify posting works
-- [x] Implement real CDC data fetching (wastewater, ED visits, hospital admissions)
-- [x] Implement format_message() with concern-level classification
-- [x] Store webhook URL as GitHub secret `DISCORD_WEBHOOK_URL`
-- [x] Refine message format for readability
+See `DATA_SOURCES.md` for data source details.
