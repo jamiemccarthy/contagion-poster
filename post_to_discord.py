@@ -1,3 +1,4 @@
+import argparse
 import os
 from collections import defaultdict
 
@@ -15,10 +16,9 @@ DMV_STATES = {"DC", "MD", "VA"}
 DMV_POPULATIONS = {"DC": 689_000, "MD": 6_177_000, "VA": 8_744_000}
 DMV_TOTAL_POP = sum(DMV_POPULATIONS.values())
 
-# Counties in the DC metro area for ED visit data.
-# ED visits are reported per-county, unlike wastewater and hospital admissions
-# which are state-level.
-DMV_COUNTIES = {
+# Metro DC counties for ED visit data. ED visits are reported per-county,
+# unlike wastewater and hospital admissions which are state-level.
+METRO_DC_COUNTIES = {
     "District of Columbia": ["District of Columbia"],
     "Maryland": [
         "Anne Arundel", "Charles", "Frederick", "Howard",
@@ -50,38 +50,94 @@ HOSPITAL_ADMISSIONS_URL = "https://data.cdc.gov/resource/ua7e-t2fy.json"
 
 
 # ---------------------------------------------------------------------------
-# Hospital admission concern levels
+# Concern level classification
 #
-# Thresholds are weekly new admissions per 100,000 population, using a
-# population-weighted average across DC+MD+VA. Calibrated from the
-# 2025-06 through 2026-03 season using the CDC's own per-100k fields.
+# All three data sources use the same four-level scale: Low / Moderate / High /
+# Very High. For each source the thresholds are calibrated independently
+# against its own historical peaks and troughs.
+# ---------------------------------------------------------------------------
+
+# CDC wastewater levels mapped to our concern scale.
+WASTEWATER_TO_CONCERN = {
+    "Very Low": "Low",
+    "Low":      "Low",
+    "Moderate": "Moderate",
+    "High":     "High",
+    "Very High": "Very High",
+}
+
+# ED visit thresholds (% of DC-metro ED visits, averaged across DMV counties).
+# Calibrated from 2022-2026 data:
+#   COVID: recent seasonal peaks ~2.8-3.2%; off-season baseline ~0.3-0.5%
+#   Flu:   winter 2025 peak ~11.1%; off-season baseline ~0.05-0.2%
+#   RSV:   peak ~1.75% (Oct 2022); off-season baseline ~0.01%
+ED_VISIT_THRESHOLDS = {
+    "COVID": {"Low": 0.80, "Moderate": 1.60, "High": 2.40},
+    "Flu":   {"Low": 2.80, "Moderate": 5.60, "High": 8.30},
+    "RSV":   {"Low": 0.44, "Moderate": 0.88, "High": 1.31},
+}
+
+# Hospital admission thresholds (weekly new admissions per 100k population,
+# population-weighted across DC+MD+VA). Calibrated from the 2025-06 through
+# 2026-03 season using the CDC's own per-100k fields.
 #
 # Note: these counts include all patients admitted *with* confirmed disease,
 # not only those admitted *for* the disease as the primary reason. The same
 # definition applies consistently to all three diseases, so they are
 # comparable to each other but may overcount severity.
 #
-#   COVID: summer 2025 peak 2.61/100k (week of Sep 6),
-#          winter 2025 peak 2.06/100k (week of Jan 10),
+#   COVID: summer 2025 peak 2.61/100k (Sep 6), winter peak 2.06/100k (Jan 10),
 #          off-season trough ~0.59/100k
-#   Flu:   winter peak 13.28/100k (week of Jan 3),
-#          off-season baseline ~0.07-0.20/100k
-#   RSV:   winter peak 2.26/100k (week of Jan 10),
-#          off-season baseline <0.10/100k
-#
-# "Low" means near off-season baseline.
-# "Very High" means at or near the season peak.
-# ---------------------------------------------------------------------------
-
+#   Flu:   winter peak 13.28/100k (Jan 3); off-season baseline ~0.07-0.20/100k
+#   RSV:   winter peak 2.26/100k (Jan 10); off-season baseline <0.10/100k
 ADMISSION_THRESHOLDS = {
-    "COVID": {"low": 0.70, "medium": 1.50, "high": 2.60},
-    "Flu":   {"low": 1.50, "medium": 5.00, "high": 10.0},
-    "RSV":   {"low": 0.30, "medium": 1.00, "high": 1.80},
+    "COVID": {"Low": 0.70, "Moderate": 1.50, "High": 2.10},
+    "Flu":   {"Low": 1.50, "Moderate": 5.00, "High": 10.0},
+    "RSV":   {"Low": 0.30, "Moderate": 1.00, "High": 1.80},
 }
 
 # Trend thresholds: % change of current week vs prior 3-week average.
-# Positive means admissions are rising.
-TREND_THRESHOLDS = {"low": 0.15, "medium": 0.40, "high": 0.70}
+# Positive means admissions are rising. Only flags concern when rising;
+# a stable or declining trend is always Low concern.
+TREND_THRESHOLDS = {"Low": 0.15, "Moderate": 0.40, "High": 0.70}
+
+CONCERN_LEVELS = ["Low", "Moderate", "High", "Very High"]
+
+# Standard abbreviated month names (AP style; May/June/July are not shortened)
+MONTH_ABBREVS = {
+    1: "Jan.", 2: "Feb.", 3: "Mar.", 4: "Apr.", 5: "May",
+    6: "June", 7: "July", 8: "Aug.", 9: "Sep.", 10: "Oct.",
+    11: "Nov.", 12: "Dec.",
+}
+
+
+def format_date(iso_date):
+    """Format an ISO date string (YYYY-MM-DD) as 'Mon. DD', e.g. 'Mar. 21'."""
+    year, month, day = iso_date.split("-")
+    return f"{MONTH_ABBREVS[int(month)]} {int(day)}"
+
+
+def max_concern(*concerns):
+    """Return the highest concern level from the given values."""
+    return CONCERN_LEVELS[max(CONCERN_LEVELS.index(c) for c in concerns)]
+
+
+def classify_wastewater_concern(level):
+    """Map a CDC wastewater activity level to our concern scale."""
+    return WASTEWATER_TO_CONCERN.get(level, "Low")
+
+
+def classify_ed_visit_concern(pct, virus):
+    """Classify the % of ED visits for a virus.
+
+    Returns one of: Low, Medium, High, Very High.
+    Calibrated against 2022-2026 seasonal peaks for DC-metro counties.
+    """
+    t = ED_VISIT_THRESHOLDS[virus]
+    if pct < t["Low"]:      return "Low"
+    elif pct < t["Moderate"]: return "Moderate"
+    elif pct < t["High"]:   return "High"
+    else:                   return "Very High"
 
 
 def classify_absolute_concern(admissions, virus):
@@ -91,19 +147,15 @@ def classify_absolute_concern(admissions, virus):
     Based on where this week's combined DC+MD+VA admissions fall relative
     to peaks observed in the 2025-2026 season.
     """
-    thresholds = ADMISSION_THRESHOLDS[virus]
-    if admissions < thresholds["low"]:
-        return "Low"
-    elif admissions < thresholds["medium"]:
-        return "Medium"
-    elif admissions < thresholds["high"]:
-        return "High"
-    else:
-        return "Very High"
+    t = ADMISSION_THRESHOLDS[virus]
+    if admissions < t["Low"]:      return "Low"
+    elif admissions < t["Moderate"]: return "Moderate"
+    elif admissions < t["High"]:   return "High"
+    else:                          return "Very High"
 
 
 def classify_trend_concern(current, prior_3wk_avg):
-    """Classify whether admissions are rising relative to recent weeks.
+    """Classify whether hospital admissions are rising relative to recent weeks.
 
     Compares the current week to the average of the prior 3 weeks.
     Returns one of: Low, Medium, High, Very High.
@@ -112,20 +164,25 @@ def classify_trend_concern(current, prior_3wk_avg):
     if prior_3wk_avg == 0:
         return "Low"
     pct_change = (current - prior_3wk_avg) / prior_3wk_avg
-    if pct_change <= TREND_THRESHOLDS["low"]:
-        return "Low"
-    elif pct_change <= TREND_THRESHOLDS["medium"]:
-        return "Medium"
-    elif pct_change <= TREND_THRESHOLDS["high"]:
-        return "High"
-    else:
-        return "Very High"
+    if pct_change <= TREND_THRESHOLDS["Low"]:      return "Low"
+    elif pct_change <= TREND_THRESHOLDS["Moderate"]: return "Moderate"
+    elif pct_change <= TREND_THRESHOLDS["High"]:   return "High"
+    else:                                          return "Very High"
 
 
-def overall_concern(absolute, trend):
-    """Overall concern is the greater of absolute and trend concern."""
-    levels = ["Low", "Medium", "High", "Very High"]
-    return levels[max(levels.index(absolute), levels.index(trend))]
+def trend_direction(current, prior_3wk_avg):
+    """Describe whether admissions are rising, stable, or declining.
+
+    Uses the same ±15% threshold as classify_trend_concern's Low boundary.
+    """
+    if prior_3wk_avg == 0:
+        return "stable"
+    pct_change = (current - prior_3wk_avg) / prior_3wk_avg
+    if pct_change > TREND_THRESHOLDS["Low"]:
+        return "rising"
+    elif pct_change < -TREND_THRESHOLDS["Low"]:
+        return "declining"
+    return "stable"
 
 
 # ---------------------------------------------------------------------------
@@ -150,16 +207,13 @@ def fetch_ed_visits():
     Returns the most recent week of data for each county in DMV_COUNTIES.
     """
     # Build a SoQL filter for our specific counties within each state
-    county_clauses = []
-    for state, counties in DMV_COUNTIES.items():
-        for county in counties:
-            county_clauses.append(
-                f"(geography='{state}' AND county='{county}')"
-            )
-    where = " OR ".join(county_clauses)
-
+    county_clauses = [
+        f"(geography='{state}' AND county='{county}')"
+        for state, counties in METRO_DC_COUNTIES.items()
+        for county in counties
+    ]
     resp = requests.get(ED_VISITS_URL, params={
-        "$where": where,
+        "$where": " OR ".join(county_clauses),
         "$order": "week_end DESC",
         # One row per county per week; grab enough for the latest week
         "$limit": "100",
@@ -193,7 +247,7 @@ def fetch_hospital_admissions():
 
     # Compute a population-weighted average of the CDC's per-100k fields
     # across DC+MD+VA for each week. Weighting by population prevents DC
-    # (689k residents) from having equal influence to VA (8.7M residents)
+    # (700k residents) from having equal influence to VA (8.7M residents)
     # in a simple average, since per-100k rates for a small jurisdiction
     # can be volatile.
     #
@@ -228,7 +282,6 @@ def fetch_hospital_admissions():
             "RSV":   raw["RSV"],
             "reporting_pct": sum(pcts) / len(pcts) if pcts else 0,
         })
-
     return weeks
 
 
@@ -264,97 +317,76 @@ def fetch_data():
 
 
 # ---------------------------------------------------------------------------
-# Message formatting — wastewater
+# Summarize each data source into structured dicts
 # ---------------------------------------------------------------------------
 
 def summarize_wastewater(ww):
-    """Distill raw wastewater records into a simple summary dict.
+    """Distill raw wastewater records into a summary dict.
 
-    Returns: {virus: {state: level, ...}, "period": "..."}
+    Returns: {"period": "...", virus: {"DC": level, "MD": level, "VA": level,
+              "concern": concern_level}, ...}
     All records share the same reporting week, so we grab the period from any.
     """
     any_record = next(r for records in ww.values() for r in records)
     summary = {"period": any_record.get("Time_Period", "unknown period")}
     for virus, records in ww.items():
-        summary[virus] = {r["State_Abbreviation"]: r.get("WVAL_Category", "No data")
-                          for r in records}
+        levels = {}
+        for r in records:
+            levels[r["State_Abbreviation"]] = r.get("WVAL_Category", "No data")
+        concern = max_concern(*[classify_wastewater_concern(lv) for lv in levels.values()])
+        summary[virus] = {"DC": levels.get("DC"), "MD": levels.get("MD"),
+                          "VA": levels.get("VA"), "concern": concern}
     return summary
 
 
-def format_wastewater(ww):
-    """Format wastewater summary into Discord text."""
-    summary = summarize_wastewater(ww)
-    lines = [
-        "**Wastewater Viral Activity (DC, MD, VA)**",
-        f"_{summary['period']}_",
-    ]
-    for virus in ["COVID", "Flu", "RSV"]:
-        levels = ", ".join(f"{st}: {summary[virus][st]}" for st in ["DC", "MD", "VA"])
-        lines.append(f"  {virus}: {levels}")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Message formatting — ED visits
-# ---------------------------------------------------------------------------
-
 def summarize_ed_visits(ed):
-    """Distill raw ED visit records into per-disease averages and trends.
+    """Distill raw ED visit records into per-disease averages and concern levels.
 
     Averages % of visits across all DMV counties for a metro-wide summary.
     For trend, if any county is Increasing we call the whole metro Increasing;
     if all are Decreasing we call it Decreasing; otherwise Stable.
 
-    Returns: {"week_end": "...", virus: {"pct": "1.2%", "trend": "Stable"}, ...}
+    Returns: {"week_end": "...", virus: {"pct": float, "trend": str,
+              "concern": str}, ...}  or None if no data.
     """
     if not ed:
         return None
 
     def avg_pct(field):
         vals = [float(r[field]) for r in ed if r.get(field)]
-        return f"{sum(vals) / len(vals):.1f}%" if vals else "N/A"
+        return sum(vals) / len(vals) if vals else 0.0
 
     def metro_trend(field):
         trends = {r.get(field) for r in ed if r.get(field)}
         if "Increasing" in trends:
-            return "Increasing"
+            return "increasing"
         if "Decreasing" in trends and "No Change" not in trends:
-            return "Decreasing"
-        return "Stable"
+            return "declining"
+        return "stable"
 
-    return {
-        "week_end": ed[0]["week_end"][:10],
-        "COVID": {"pct": avg_pct("percent_visits_covid"),   "trend": metro_trend("ed_trends_covid")},
-        "Flu":   {"pct": avg_pct("percent_visits_influenza"), "trend": metro_trend("ed_trends_influenza")},
-        "RSV":   {"pct": avg_pct("percent_visits_rsv"),     "trend": metro_trend("ed_trends_rsv")},
-    }
+    result = {"week_end": ed[0]["week_end"][:10]}
+    for virus, pct_field, trend_field in [
+        ("COVID", "percent_visits_covid",   "ed_trends_covid"),
+        ("Flu",   "percent_visits_influenza", "ed_trends_influenza"),
+        ("RSV",   "percent_visits_rsv",     "ed_trends_rsv"),
+    ]:
+        pct = avg_pct(pct_field)
+        result[virus] = {
+            "pct": pct,
+            "trend": metro_trend(trend_field),
+            "concern": classify_ed_visit_concern(pct, virus),
+        }
+    return result
 
-
-def format_ed_visits(ed):
-    """Format ED visit summary into Discord text."""
-    summary = summarize_ed_visits(ed)
-    if not summary:
-        return None
-    lines = [f"**ED Visits — DC Metro Counties** (week ending {summary['week_end']})"]
-    for virus in ["COVID", "Flu", "RSV"]:
-        pct = summary[virus]["pct"]
-        trend = summary[virus]["trend"]
-        lines.append(f"  {virus}: {pct} of visits ({trend})")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Message formatting — hospital admissions
-# ---------------------------------------------------------------------------
 
 def summarize_hospital_admissions(weeks):
     """Distill weekly hospital admission history into per-disease concern levels.
 
     Selects the most recent complete week, computes a 3-week trailing average
-    for trend detection, and classifies absolute and trend concern for each virus.
+    for trend detection, and classifies concern for each virus.
 
     Returns: {"week": "...", "skipped_incomplete": bool,
-              virus: {"count": int, "absolute": str, "trend": str, "concern": str}, ...}
+              virus: {"per100k": float, "concern": str, "trend_dir": str}, ...}
     """
     idx = pick_latest_complete_week(weeks)
     current = weeks[idx]
@@ -365,47 +397,141 @@ def summarize_hospital_admissions(weeks):
         "skipped_incomplete": idx > 0,
     }
     for virus in ["COVID", "Flu", "RSV"]:
-        per100k = current[virus]  # already normalised in fetch_hospital_admissions
+        per100k = current[virus]
         absolute = classify_absolute_concern(per100k, virus)
         if len(prior_3) >= 3:
             prior_avg = sum(w[virus] for w in prior_3) / 3
-            trend = classify_trend_concern(per100k, prior_avg)
+            trend_concern = classify_trend_concern(per100k, prior_avg)
+            trend_dir = trend_direction(per100k, prior_avg)
         else:
-            trend = "Low"
+            trend_concern = "Low"
+            trend_dir = "stable"
         summary[virus] = {
-            "count": per100k,  # per-100k value; field name kept for compatibility
-            "absolute": absolute,
-            "trend": trend,
-            "concern": overall_concern(absolute, trend),
+            "per100k": per100k,
+            "concern": max_concern(absolute, trend_concern),
+            "trend_dir": trend_dir,
         }
     return summary
 
 
-def format_hospital_admissions(weeks):
-    """Format hospital admissions summary into Discord text."""
-    summary = summarize_hospital_admissions(weeks)
-    week_label = summary["week"]
-    if summary["skipped_incomplete"]:
-        week_label += " (latest complete)"
-    lines = [f"**Hospital Admissions (DC, MD, VA)** (week ending {week_label})"]
+def compute_overall_concerns(ww_summary, ed_summary, hosp_summary):
+    """Combine all three data sources into a single overall concern per disease.
+
+    Returns: {virus: concern_level, ...}
+    """
+    result = {}
     for virus in ["COVID", "Flu", "RSV"]:
-        v = summary[virus]
-        lines.append(f"  {virus}: {v['count']:.2f}/100k — concern: {v['concern']}")
+        ww_concern = ww_summary[virus]["concern"]
+        ed_concern = ed_summary[virus]["concern"] if ed_summary else "Low"
+        hosp_concern = hosp_summary[virus]["concern"]
+        result[virus] = max_concern(ww_concern, ed_concern, hosp_concern)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Message formatting — three detail levels
+# ---------------------------------------------------------------------------
+
+def format_low(overall_concerns):
+    """Single-line summary. All three diseases listed, grouped by level, highest first."""
+    by_level = defaultdict(list)
+    for virus in ["COVID", "Flu", "RSV"]:
+        by_level[overall_concerns[virus]].append(virus)
+    sorted_levels = sorted(by_level, key=CONCERN_LEVELS.index, reverse=True)
+    parts = ["/".join(by_level[level]) + f" {level.lower()}" for level in sorted_levels]
+    return "Contagion levels: " + ", ".join(parts)
+
+
+def format_medium(overall_concerns, ww_summary, ed_summary, hosp_summary):
+    """Per-disease summary. Elevated diseases show the contributing factors."""
+    week = format_date(hosp_summary["week"])
+    lines = [f"Contagion update — as of {week}"]
+
+    for virus in ["COVID", "Flu", "RSV"]:
+        concern = overall_concerns[virus]
+        if concern == "Low":
+            lines.append(f"{virus}: low")
+            continue
+
+        # Collect the factors that are driving the concern
+        factors = []
+
+        ww = ww_summary[virus]
+        if ww["concern"] != "Low":
+            ww_display_order = ["Very Low", "Low", "Moderate", "High", "Very High"]
+            ww_vals = [ww[st] for st in ["DC", "MD", "VA"] if ww[st]]
+            unique = sorted(set(ww_vals), key=ww_display_order.index)
+            if len(unique) == 1:
+                factors.append(f"wastewater {unique[0].lower()}")
+            else:
+                factors.append(f"wastewater {unique[0].lower()} to {unique[-1].lower()}")
+
+        hosp = hosp_summary[virus]
+        if hosp["concern"] != "Low":
+            factors.append(
+                f"hospital admissions {hosp['concern'].lower()} and {hosp['trend_dir']}"
+            )
+
+        if ed_summary:
+            ed = ed_summary[virus]
+            if ed["concern"] != "Low":
+                factors.append(f"ED visits {ed['concern'].lower()}")
+
+        lines.append(f"{virus}: {concern.lower()} ({'; '.join(factors)})")
+
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Top-level message assembly
-# ---------------------------------------------------------------------------
+def format_high(overall_concerns, ww_summary, ed_summary, hosp_summary):
+    """Full detail: all three data sources, all numbers, per disease."""
+    week = format_date(hosp_summary["week"])
+    lines = [f"Contagion update — as of {week}", ""]
 
-def format_message(data):
-    """Assemble all three sections into a single Discord message."""
-    sections = [
-        format_wastewater(data["wastewater"]),
-        format_ed_visits(data["ed_visits"]),
-        format_hospital_admissions(data["hospital_admissions"]),
-    ]
-    return "\n\n".join(s for s in sections if s)
+    for virus in ["COVID", "Flu", "RSV"]:
+        concern = overall_concerns[virus]
+        lines.append(f"**{virus}: {concern}**")
+
+        # Wastewater
+        ww = ww_summary[virus]
+        ww_states = [ww[st] for st in ["DC", "MD", "VA"] if ww[st]]
+        if len(set(ww_states)) == 1:
+            lines.append(f"  Wastewater: {ww_states[0]} across DMV")
+        else:
+            state_str = ", ".join(f"{st} {ww[st]}" for st in ["DC", "MD", "VA"])
+            lines.append(f"  Wastewater: {state_str}")
+
+        # ED visits
+        if ed_summary:
+            ed = ed_summary[virus]
+            lines.append(
+                f"  ED visits: {ed['pct']:.1f}% ({ed['concern']}, {ed['trend']})"
+            )
+
+        # Hospital admissions
+        hosp = hosp_summary[virus]
+        lines.append(
+            f"  Hospital admissions: {hosp['per100k']:.2f}/100k"
+            f" ({hosp['concern']}, {hosp['trend_dir']})"
+        )
+
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+def format_message(data, detail="low"):
+    """Format all data into a Discord message at the requested detail level."""
+    ww_summary   = summarize_wastewater(data["wastewater"])
+    ed_summary   = summarize_ed_visits(data["ed_visits"])
+    hosp_summary = summarize_hospital_admissions(data["hospital_admissions"])
+    overall      = compute_overall_concerns(ww_summary, ed_summary, hosp_summary)
+
+    if detail == "low":
+        return format_low(overall)
+    elif detail == "medium":
+        return format_medium(overall, ww_summary, ed_summary, hosp_summary)
+    else:
+        return format_high(overall, ww_summary, ed_summary, hosp_summary)
 
 
 def post_to_discord(content):
@@ -420,8 +546,17 @@ def post_to_discord(content):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--detail",
+        choices=["low", "medium", "high"],
+        default="low",
+        help="Amount of detail to include in the Discord message (default: low)",
+    )
+    args = parser.parse_args()
+
     data = fetch_data()
-    message = format_message(data)
+    message = format_message(data, detail=args.detail)
     print(message)
     post_to_discord(message)
 

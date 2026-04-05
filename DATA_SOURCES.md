@@ -7,8 +7,8 @@ As of 2026-04-04, all three sources report data through the week ending 2026-03-
 | Source | Diseases | Geography | What it measures | Freshness | Notes |
 |---|---|---|---|---|---|
 | Wastewater (NWSS) | COVID, Flu, RSV | State (DC, MD, VA) | Categorical activity level (Very Low–Very High) | Updated Fridays, ~5 day lag | Undocumented CDC endpoints; stable in practice |
-| ED Visits (NSSP) | COVID, Flu, RSV | County | % of ED visits + trend direction | Updated weekly, ~7 day lag | Official Socrata API; can filter to specific DMV counties |
-| Hospital Admissions (NHSN) | COVID, Flu, RSV | State (DC, MD, VA) | Confirmed new admissions per 100k population | Updated weekly, ~7 day lag | Official Socrata API |
+| ED Visits (NSSP) | COVID, Flu, RSV | County | % of ED visits + trend direction | Updated weekly, ~7 day lag | data.cdc.gov SODA API (Tyler Technologies/Socrata platform); can filter to specific DMV counties |
+| Hospital Admissions (NHSN) | COVID, Flu, RSV | State (DC, MD, VA) | Confirmed new admissions per 100k population | Updated weekly, ~7 day lag | data.cdc.gov SODA API (Tyler Technologies/Socrata platform) |
 
 **Tradeoffs:**
 - Wastewater is the earliest signal (detects community spread before people show up at hospitals) but only at state level
@@ -53,7 +53,7 @@ Notes:
 
 Covers COVID, flu, and RSV in one dataset. County-level data for DC, MD, VA confirmed available. Key fields: `week_end`, `geography`, `county`, `percent_visits_covid`, `percent_visits_influenza`, `percent_visits_rsv`, `ed_trends_covid`, `ed_trends_influenza`, `ed_trends_rsv` (trends: "Increasing"/"Decreasing"/"No Change"). No API key required.
 
-DMV counties to query:
+Metro DC counties to query:
 - **DC:** District of Columbia
 - **MD:** Prince Georges, Montgomery, Charles, Anne Arundel, Howard, Frederick
 - **VA:** Arlington, Fairfax, Fairfax City, Falls Church City, Loudoun, Prince William, Alexandria City

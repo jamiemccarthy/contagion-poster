@@ -46,4 +46,4 @@ See `README.md` and `DATA_SOURCES.md` for data source details.
 - [x] Implement real CDC data fetching (wastewater, ED visits, hospital admissions)
 - [x] Implement format_message() with concern-level classification
 - [x] Store webhook URL as GitHub secret `DISCORD_WEBHOOK_URL`
-- [ ] Refine message format for readability
+- [x] Refine message format for readability
