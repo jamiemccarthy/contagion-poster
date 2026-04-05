@@ -1,6 +1,7 @@
 import argparse
 import os
 from collections import defaultdict
+from datetime import datetime
 
 import requests
 
@@ -115,6 +116,22 @@ def format_date(iso_date):
     """Format an ISO date string (YYYY-MM-DD) as 'Mon. DD', e.g. 'Mar. 21'."""
     year, month, day = iso_date.split("-")
     return f"{MONTH_ABBREVS[int(month)]} {int(day)}"
+
+
+def parse_wastewater_end_date(time_period):
+    """Extract the end date from a wastewater time period string.
+
+    Input: "March 22, 2026 - March 28, 2026"
+    Output: "2026-03-28" (ISO format)
+    """
+    if not time_period or " - " not in time_period:
+        return None
+    end_date_str = time_period.split(" - ")[1]
+    try:
+        dt = datetime.strptime(end_date_str, "%B %d, %Y")
+        return dt.strftime("%Y-%m-%d")
+    except (ValueError, IndexError):
+        return None
 
 
 def max_concern(*concerns):
@@ -442,9 +459,11 @@ def format_low(overall_concerns):
     return "Contagion levels: " + ", ".join(parts)
 
 
-def format_medium(overall_concerns, ww_summary, ed_summary, hosp_summary):
+def format_medium(overall_concerns, ww_summary, ed_summary, hosp_summary, date_iso=None):
     """Per-disease summary. Elevated diseases show the contributing factors."""
-    week = format_date(hosp_summary["week"])
+    if date_iso is None:
+        date_iso = hosp_summary["week"]
+    week = format_date(date_iso)
     lines = [f"Contagion update — as of {week}"]
 
     for virus in ["COVID", "Flu", "RSV"]:
@@ -482,9 +501,11 @@ def format_medium(overall_concerns, ww_summary, ed_summary, hosp_summary):
     return "\n".join(lines)
 
 
-def format_high(overall_concerns, ww_summary, ed_summary, hosp_summary):
+def format_high(overall_concerns, ww_summary, ed_summary, hosp_summary, date_iso=None):
     """Full detail: all three data sources, all numbers, per disease."""
-    week = format_date(hosp_summary["week"])
+    if date_iso is None:
+        date_iso = hosp_summary["week"]
+    week = format_date(date_iso)
     lines = [f"Contagion update — as of {week}", ""]
 
     for virus in ["COVID", "Flu", "RSV"]:
@@ -526,12 +547,16 @@ def format_message(data, detail="low"):
     hosp_summary = summarize_hospital_admissions(data["hospital_admissions"])
     overall      = compute_overall_concerns(ww_summary, ed_summary, hosp_summary)
 
+    # Use the wastewater time period's end date (most current data source)
+    ww_date = parse_wastewater_end_date(ww_summary.get("period"))
+    date_to_use = ww_date or hosp_summary["week"]
+
     if detail == "low":
         return format_low(overall)
     elif detail == "medium":
-        return format_medium(overall, ww_summary, ed_summary, hosp_summary)
+        return format_medium(overall, ww_summary, ed_summary, hosp_summary, date_to_use)
     else:
-        return format_high(overall, ww_summary, ed_summary, hosp_summary)
+        return format_high(overall, ww_summary, ed_summary, hosp_summary, date_to_use)
 
 
 def post_to_discord(content):
