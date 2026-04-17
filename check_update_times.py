@@ -37,7 +37,8 @@ SOCRATA_DATA = "https://data.cdc.gov/resource/{}.json"
 
 
 def fetch_json(url):
-    with urllib.request.urlopen(url, timeout=15) as r:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as r:
         raw = r.read()
     # Handle UTF-8 BOM (CDC wastewater files)
     return json.loads(raw.decode("utf-8-sig"))
