@@ -1,0 +1,37 @@
+name: Poll CDC Update Times
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: poll-update-times
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: update-time-log
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Poll CDC endpoints
+        run: python check_update_times.py
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update_log.csv
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "chore: poll CDC update times"
+          git push origin update-time-log
