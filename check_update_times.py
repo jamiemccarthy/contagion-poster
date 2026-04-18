@@ -11,8 +11,14 @@ Usage:
 import csv
 import json
 import os
+import time
 import urllib.request
+import urllib.error
 from datetime import datetime, timezone
+
+
+RETRY_BASE = 10
+RETRY_MAX = 5
 
 
 LOG_FILE = os.path.join(os.path.dirname(__file__), "update_log.csv")
@@ -38,10 +44,19 @@ SOCRATA_DATA = "https://data.cdc.gov/resource/{}.json"
 
 def fetch_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        raw = r.read()
-    # Handle UTF-8 BOM (CDC wastewater files)
-    return json.loads(raw.decode("utf-8-sig"))
+    for attempt in range(RETRY_MAX):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                raw = r.read()
+            # Handle UTF-8 BOM (CDC wastewater files)
+            return json.loads(raw.decode("utf-8-sig"))
+        except urllib.error.HTTPError as e:
+            if e.code in (502, 503) and attempt < RETRY_MAX - 1:
+                wait = RETRY_BASE * (2 ** attempt)
+                print(f"{e.code} on {url}, retrying in {wait}s (attempt {attempt + 1}/{RETRY_MAX})")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def unix_to_iso(ts):
