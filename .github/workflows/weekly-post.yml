@@ -2,9 +2,9 @@ name: Weekly Discord Post
 
 on:
   schedule:
-    # Every Friday at 16:00 UTC (12:00 noon Eastern) — after CDC NHSN data
-    # typically publishes (~14:00 UTC). Adjust if data is arriving late.
-    - cron: "0 16 * * 5"
+    # Every Friday at 11:00 UTC (07:00 EDT) — hosp prelim (Thu) and wastewater
+    # (Fri ~07:00 UTC) available; ED visits and hosp final publish Saturday.
+    - cron: "0 11 * * 5"
   workflow_dispatch: # Allows manual triggering from the GitHub Actions UI
 
 jobs:
