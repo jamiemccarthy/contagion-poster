@@ -2,9 +2,10 @@ name: Weekly Discord Post
 
 on:
   schedule:
-    # Every Friday at 11:00 UTC (07:00 EDT) — hosp prelim (Thu) and wastewater
-    # (Fri ~07:00 UTC) available; ED visits and hosp final publish Saturday.
-    - cron: "0 11 * * 5"
+    # Every Thursday at 22:00 UTC (18:00 EDT) — after hosp prelim publishes
+    # (~15–19 UTC Thu). ED visits, hosp final, and wastewater all publish
+    # Saturday, after the Friday game, so this is the freshest data available.
+    - cron: "0 22 * * 4"
   workflow_dispatch: # Allows manual triggering from the GitHub Actions UI
 
 jobs:
