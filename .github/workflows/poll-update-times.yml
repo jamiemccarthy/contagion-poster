@@ -2,7 +2,7 @@ name: Poll CDC Update Times
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */6 * * *"        # baseline every 6h at :00
   workflow_dispatch:
 
 concurrency:
