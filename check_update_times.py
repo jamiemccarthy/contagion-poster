@@ -36,7 +36,7 @@ FIELDNAMES = [
 ]
 
 WASTEWATER_URL = (
-    "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/sc2/nwsssc2statemapDL.json"
+    "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/NWSS_WVAL_metric/NWSSWVALStateDatabites.json"
 )
 SOCRATA_META = "https://data.cdc.gov/api/views/{}.json"
 SOCRATA_DATA = "https://data.cdc.gov/resource/{}.json"
@@ -66,27 +66,30 @@ def unix_to_iso(ts):
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
 
 
-def wastewater_week_end(time_period):
-    """Extract the end date from a wastewater Time_Period string.
+def parse_wastewater_date_updated(s):
+    """Parse the wastewater feed's Date_Updated string to ISO-8601 (naive).
 
-    Input:  "March 29, 2026 - April 04, 2026"
-    Output: "2026-04-04"
+    Input:  "May 21, 2026 3:32 AM"
+    Output: "2026-05-21T03:32:00"
+
+    Timezone is unspecified in the source, so the output is naive.
     """
-    if not time_period or " - " not in time_period:
+    if not s:
         return ""
-    end = time_period.split(" - ")[1]
     try:
-        return datetime.strptime(end, "%B %d, %Y").strftime("%Y-%m-%d")
+        return datetime.strptime(s, "%B %d, %Y %I:%M %p").isoformat()
     except ValueError:
-        return end
+        return s
 
 
 def check_wastewater():
     data = fetch_json(WASTEWATER_URL)
+    # Feed has 53 states x 3 pathogens for one week; all rows share Week_End
+    # and Date_Updated, so any row will do.
     record = data[0] if data else {}
     return {
-        "ww_rows_updated_at": record.get("date_updated", ""),
-        "ww_week_end": wastewater_week_end(record.get("Time_Period", "")),
+        "ww_rows_updated_at": parse_wastewater_date_updated(record.get("Date_Updated", "")),
+        "ww_week_end": record.get("Week_End", ""),
     }
 
 
