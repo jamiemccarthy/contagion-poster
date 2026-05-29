@@ -1,14 +1,11 @@
 import argparse
 import os
 from collections import defaultdict
-from datetime import datetime
 
 import requests
 
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-
-DMV_STATES = {"DC", "MD", "VA"}
 
 # 2020-census populations used to compute a population-weighted average of the
 # CDC's per-100k admission rates across the three jurisdictions. This gives a
@@ -31,14 +28,28 @@ METRO_DC_COUNTIES = {
     ],
 }
 
-# Undocumented CDC endpoints for wastewater viral activity levels (NWSS).
-# Return categorical levels (Very Low / Low / Moderate / High / Very High)
-# per state. Wastewater is the earliest signal — it detects community spread
-# before people show up at hospitals. Updated Fridays.
-WASTEWATER_ENDPOINTS = {
-    "COVID": "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/sc2/nwsssc2statemapDL.json",
-    "Flu": "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/flua/nwssfluastatemapDL.json",
-    "RSV": "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/rsv/nwssrsvstatemapDL.json",
+# Undocumented CDC endpoint for NWSS wastewater viral activity levels (WVAL).
+# Returns one row per state per pathogen — categorical levels
+# (Very Low / Low / Moderate / High / Very High). Wastewater is the earliest
+# signal — it detects community spread before people show up at hospitals.
+# This feed replaced the per-pathogen nwss{sc2,flua,rsv}statemap.json files
+# in May 2026; updates land Wed/Thu.
+WASTEWATER_URL = (
+    "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/NWSS_WVAL_metric/NWSSWVALStateDatabites.json"
+)
+
+# The new feed identifies pathogens by full name; map to our virus keys.
+WASTEWATER_PATHOGEN_MAP = {
+    "SARS-CoV-2": "COVID",
+    "Influenza A virus": "Flu",
+    "RSV": "RSV",
+}
+
+# The new feed identifies states by full name; we want abbreviations.
+DMV_STATE_NAMES = {
+    "District of Columbia": "DC",
+    "Maryland": "MD",
+    "Virginia": "VA",
 }
 
 # Official Socrata API on data.cdc.gov. % of ED visits for each disease plus
@@ -118,22 +129,6 @@ def format_date(iso_date):
     return f"{MONTH_ABBREVS[int(month)]} {int(day)}"
 
 
-def parse_wastewater_end_date(time_period):
-    """Extract the end date from a wastewater time period string.
-
-    Input: "March 22, 2026 - March 28, 2026"
-    Output: "2026-03-28" (ISO format)
-    """
-    if not time_period or " - " not in time_period:
-        return None
-    end_date_str = time_period.split(" - ")[1]
-    try:
-        dt = datetime.strptime(end_date_str, "%B %d, %Y")
-        return dt.strftime("%Y-%m-%d")
-    except (ValueError, IndexError):
-        return None
-
-
 def max_concern(*concerns):
     """Return the highest concern level from the given values."""
     return CONCERN_LEVELS[max(CONCERN_LEVELS.index(c) for c in concerns)]
@@ -207,14 +202,30 @@ def trend_direction(current, prior_3wk_avg):
 # ---------------------------------------------------------------------------
 
 def fetch_wastewater():
-    """Fetch wastewater viral activity levels for DC, MD, VA."""
-    results = {}
-    for virus, url in WASTEWATER_ENDPOINTS.items():
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        resp.encoding = "utf-8-sig"  # CDC files have a UTF-8 BOM
-        records = resp.json()
-        results[virus] = [r for r in records if r.get("State_Abbreviation") in DMV_STATES]
+    """Fetch wastewater viral activity levels for DC, MD, VA.
+
+    The new combined feed returns 53 states × 3 pathogens. We filter to
+    DMV states, group by virus, and normalize the field names so callers
+    can read State_Abbreviation / WVAL_Category as before.
+    """
+    resp = requests.get(WASTEWATER_URL, timeout=15)
+    resp.raise_for_status()
+    resp.encoding = "utf-8-sig"  # CDC files have a UTF-8 BOM
+    records = resp.json()
+
+    results = {virus: [] for virus in WASTEWATER_PATHOGEN_MAP.values()}
+    for r in records:
+        state_name = r.get("State/Territory")
+        if state_name not in DMV_STATE_NAMES:
+            continue
+        virus = WASTEWATER_PATHOGEN_MAP.get(r.get("Pathogen_Target"))
+        if not virus:
+            continue
+        results[virus].append({
+            "State_Abbreviation": DMV_STATE_NAMES[state_name],
+            "WVAL_Category": r.get("State/Territory_WVAL_Category"),
+            "Week_End": r.get("Week_End"),
+        })
     return results
 
 
@@ -341,12 +352,12 @@ def fetch_data():
 def summarize_wastewater(ww):
     """Distill raw wastewater records into a summary dict.
 
-    Returns: {"period": "...", virus: {"DC": level, "MD": level, "VA": level,
-              "concern": concern_level}, ...}
-    All records share the same reporting week, so we grab the period from any.
+    Returns: {"week_end": "YYYY-MM-DD", virus: {"DC": level, "MD": level,
+              "VA": level, "concern": concern_level}, ...}
+    All records share the same reporting week, so we grab Week_End from any.
     """
     any_record = next(r for records in ww.values() for r in records)
-    summary = {"period": any_record.get("Time_Period", "unknown period")}
+    summary = {"week_end": any_record.get("Week_End")}
     for virus, records in ww.items():
         levels = {}
         for r in records:
@@ -548,9 +559,8 @@ def format_message(data, detail="low"):
     hosp_summary = summarize_hospital_admissions(data["hospital_admissions"])
     overall      = compute_overall_concerns(ww_summary, ed_summary, hosp_summary)
 
-    # Use the wastewater time period's end date (most current data source)
-    ww_date = parse_wastewater_end_date(ww_summary.get("period"))
-    date_to_use = ww_date or hosp_summary["week"]
+    # Use the wastewater week_end (most current data source)
+    date_to_use = ww_summary.get("week_end") or hosp_summary["week"]
 
     if detail == "low":
         return format_low(overall)
