@@ -1,0 +1,24 @@
+{
+  "lat": 39.0,
+  "lon": -77.0,
+  "radius_km": 29.9,
+  "states": {
+    "Maryland": "MD",
+    "District of Columbia": "DC",
+    "Virginia": "VA"
+  },
+  "site_ids": [
+    "ID:730",
+    "ID:300",
+    "ID:1982",
+    "ID:2015",
+    "ID:2441"
+  ],
+  "population_served": 2363989,
+  "site_counts_by_pathogen": {
+    "RSV": 5,
+    "SARS-CoV-2": 5,
+    "Influenza A virus": 5
+  },
+  "generated_at": "2026-05-30T16:41:54.372446+00:00"
+}
