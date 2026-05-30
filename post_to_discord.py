@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from collections import defaultdict
 
@@ -7,26 +8,46 @@ import requests
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-# 2020-census populations used to compute a population-weighted average of the
-# CDC's per-100k admission rates across the three jurisdictions. This gives a
-# single DMV-region figure rather than treating DC (689k people) the same as
-# VA (8.7M people) in a simple average.
-DMV_POPULATIONS = {"DC": 689_000, "MD": 6_177_000, "VA": 8_744_000}
-DMV_TOTAL_POP = sum(DMV_POPULATIONS.values())
-
-# Metro DC counties for ED visit data. ED visits are reported per-county,
-# unlike wastewater and hospital admissions which are state-level.
-METRO_DC_COUNTIES = {
-    "District of Columbia": ["District of Columbia"],
-    "Maryland": [
-        "Anne Arundel", "Charles", "Frederick", "Howard",
-        "Montgomery", "Prince Georges",
-    ],
-    "Virginia": [
-        "Alexandria City", "Arlington", "Fairfax", "Fairfax City",
-        "Falls Church City", "Loudoun", "Prince William",
-    ],
+# 2020 Census populations keyed by state abbreviation, used for population-
+# weighted averaging of CDC per-100k hospital admission rates across states.
+US_STATE_POPULATIONS = {
+    "AL": 5_024_279, "AK": 733_391,  "AZ": 7_151_502, "AR": 3_011_524,
+    "CA": 39_538_223,"CO": 5_773_714, "CT": 3_605_944, "DE": 989_948,
+    "DC": 689_545,   "FL": 21_538_187,"GA": 10_711_908,"HI": 1_455_271,
+    "ID": 1_839_106, "IL": 12_812_508,"IN": 6_785_528, "IA": 3_190_369,
+    "KS": 2_937_880, "KY": 4_505_836, "LA": 4_657_757, "ME": 1_362_359,
+    "MD": 6_177_224, "MA": 7_029_917, "MI": 10_077_331,"MN": 5_706_494,
+    "MS": 2_961_279, "MO": 6_154_913, "MT": 1_084_225, "NE": 1_961_504,
+    "NV": 3_104_614, "NH": 1_377_529, "NJ": 9_288_994, "NM": 2_117_522,
+    "NY": 20_201_249,"NC": 10_439_388,"ND": 779_094,   "OH": 11_799_448,
+    "OK": 3_959_353, "OR": 4_237_256, "PA": 13_002_700,"RI": 1_097_379,
+    "SC": 5_118_425, "SD": 886_667,   "TN": 6_910_840, "TX": 29_145_505,
+    "UT": 3_271_616, "VT": 643_077,   "VA": 8_631_393, "WA": 7_705_281,
+    "WV": 1_793_716, "WI": 5_893_718, "WY": 576_851,
+    "PR": 3_285_874, "GU": 153_836,   "VI": 106_235,
+    "AS": 55_000,    "MP": 47_329,
 }
+
+
+def _load_location():
+    path = os.path.join(os.path.dirname(__file__), "location.json")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            "location.json not found — run: python setup_location.py LAT LON"
+        )
+    with open(path) as f:
+        return json.load(f)
+
+
+_location = _load_location()
+
+# Full state name → abbreviation, e.g. {"New Jersey": "NJ", ...}
+STATE_NAMES = _location["states"]
+STATE_ABBREVS = list(STATE_NAMES.values())
+
+# 2020 Census populations for the selected states, for hospital admission weighting
+STATE_POPULATIONS = {abbrev: US_STATE_POPULATIONS.get(abbrev, 0) for abbrev in STATE_ABBREVS}
+STATE_TOTAL_POP = sum(STATE_POPULATIONS.values())
 
 # Undocumented CDC endpoint for NWSS wastewater viral activity levels (WVAL).
 # Returns one row per state per pathogen — categorical levels
@@ -43,13 +64,6 @@ WASTEWATER_PATHOGEN_MAP = {
     "SARS-CoV-2": "COVID",
     "Influenza A virus": "Flu",
     "RSV": "RSV",
-}
-
-# The new feed identifies states by full name; we want abbreviations.
-DMV_STATE_NAMES = {
-    "District of Columbia": "DC",
-    "Maryland": "MD",
-    "Virginia": "VA",
 }
 
 # Official Socrata API on data.cdc.gov. % of ED visits for each disease plus
@@ -90,7 +104,7 @@ ED_VISIT_THRESHOLDS = {
 }
 
 # Hospital admission thresholds (weekly new admissions per 100k population,
-# population-weighted across DC+MD+VA). Calibrated from the 2025-06 through
+# population-weighted across the DMV). Calibrated from the 2025-06 through
 # 2026-03 season using the CDC's own per-100k fields.
 #
 # Note: these counts include all patients admitted *with* confirmed disease,
@@ -156,8 +170,8 @@ def classify_absolute_concern(admissions, virus):
     """Classify the absolute level of hospital admissions for a virus.
 
     Returns one of: Low, Medium, High, Very High.
-    Based on where this week's combined DC+MD+VA admissions fall relative
-    to peaks observed in the 2025-2026 season.
+    Based on where this week's admissions combined across states fall,
+    relative to peaks observed in the 2025-2026 season.
     """
     t = ADMISSION_THRESHOLDS[virus]
     if admissions < t["Low"]:      return "Low"
@@ -202,11 +216,10 @@ def trend_direction(current, prior_3wk_avg):
 # ---------------------------------------------------------------------------
 
 def fetch_wastewater():
-    """Fetch wastewater viral activity levels for DC, MD, VA.
+    """Fetch wastewater viral activity levels for the configured states.
 
-    The new combined feed returns 53 states × 3 pathogens. We filter to
-    DMV states, group by virus, and normalize the field names so callers
-    can read State_Abbreviation / WVAL_Category as before.
+    The combined feed returns 53 states × 3 pathogens. We filter to states
+    from location.json, group by virus, and normalize the field names.
     """
     resp = requests.get(WASTEWATER_URL, timeout=15)
     resp.raise_for_status()
@@ -216,13 +229,13 @@ def fetch_wastewater():
     results = {virus: [] for virus in WASTEWATER_PATHOGEN_MAP.values()}
     for r in records:
         state_name = r.get("State/Territory")
-        if state_name not in DMV_STATE_NAMES:
+        if state_name not in STATE_NAMES:
             continue
         virus = WASTEWATER_PATHOGEN_MAP.get(r.get("Pathogen_Target"))
         if not virus:
             continue
         results[virus].append({
-            "State_Abbreviation": DMV_STATE_NAMES[state_name],
+            "State_Abbreviation": STATE_NAMES[state_name],
             "WVAL_Category": r.get("State/Territory_WVAL_Category"),
             "Week_End": r.get("Week_End"),
         })
@@ -230,21 +243,18 @@ def fetch_wastewater():
 
 
 def fetch_ed_visits():
-    """Fetch ED visit percentages for DC-metro counties.
+    """Fetch ED visit percentages for the configured states.
 
-    Returns the most recent week of data for each county in DMV_COUNTIES.
+    Filters by state (geography field) rather than county. A single NWSS
+    treatment plant can serve counties across multiple states, so county names
+    in the site map can't be reliably attributed to a specific state. State-level
+    filtering avoids that ambiguity at the cost of a slightly broader average.
     """
-    # Build a SoQL filter for our specific counties within each state
-    county_clauses = [
-        f"(geography='{state}' AND county='{county}')"
-        for state, counties in METRO_DC_COUNTIES.items()
-        for county in counties
-    ]
+    state_list = ", ".join(f"'{name}'" for name in STATE_NAMES)
     resp = requests.get(ED_VISITS_URL, params={
-        "$where": " OR ".join(county_clauses),
+        "$where": f"geography in({state_list})",
         "$order": "week_end DESC",
-        # One row per county per week; grab enough for the latest week
-        "$limit": "100",
+        "$limit": "500",
     }, timeout=15)
     resp.raise_for_status()
     records = resp.json()
@@ -258,29 +268,24 @@ def fetch_ed_visits():
 
 
 def fetch_hospital_admissions():
-    """Fetch several weeks of hospital admissions for DC, MD, VA.
+    """Fetch several weeks of hospital admissions for the configured states.
 
     Returns enough history to compute the current week plus a 3-week
     trailing average for trend detection. Each week includes a
     reporting_pct field indicating what fraction of hospitals reported.
     """
+    jur_list = ", ".join(f"'{a}'" for a in STATE_ABBREVS)
     resp = requests.get(HOSPITAL_ADMISSIONS_URL, params={
-        "$where": "jurisdiction in('DC','MD','VA')",
+        "$where": f"jurisdiction in({jur_list})",
         "$order": "weekendingdate DESC",
-        # 6 weeks × 3 jurisdictions = 18 rows gives us a buffer
-        "$limit": "18",
+        "$limit": str(6 * len(STATE_ABBREVS) + 6),
     }, timeout=15)
     resp.raise_for_status()
     records = resp.json()
 
     # Compute a population-weighted average of the CDC's per-100k fields
-    # across DC+MD+VA for each week. Weighting by population prevents DC
-    # (700k residents) from having equal influence to VA (8.7M residents)
-    # in a simple average, since per-100k rates for a small jurisdiction
-    # can be volatile.
-    #
-    # We also track reporting completeness (% of hospitals that submitted
-    # data) to detect weeks where reporting is still in progress.
+    # across the selected states. Weighting by population prevents small
+    # jurisdictions from having disproportionate influence in a simple average.
     by_week = defaultdict(lambda: {
         "COVID": 0.0, "Flu": 0.0, "RSV": 0.0,
         "_reporting_pcts": [],
@@ -288,7 +293,7 @@ def fetch_hospital_admissions():
     for r in records:
         w = r["weekendingdate"][:10]
         jur = r["jurisdiction"]
-        weight = DMV_POPULATIONS[jur] / DMV_TOTAL_POP
+        weight = STATE_POPULATIONS.get(jur, 0) / STATE_TOTAL_POP if STATE_TOTAL_POP else 0
         by_week[w]["COVID"] += float(r.get("totalconfc19newadmper100k") or 0) * weight
         by_week[w]["Flu"]   += float(r.get("totalconfflunewadmper100k") or 0) * weight
         by_week[w]["RSV"]   += float(r.get("totalconfrsvnewadmper100k") or 0) * weight
@@ -363,8 +368,8 @@ def summarize_wastewater(ww):
         for r in records:
             levels[r["State_Abbreviation"]] = r.get("WVAL_Category", "No data")
         concern = max_concern(*[classify_wastewater_concern(lv) for lv in levels.values()])
-        summary[virus] = {"DC": levels.get("DC"), "MD": levels.get("MD"),
-                          "VA": levels.get("VA"), "concern": concern}
+        summary[virus] = {abbrev: levels.get(abbrev) for abbrev in STATE_ABBREVS}
+        summary[virus]["concern"] = concern
     return summary
 
 
@@ -490,7 +495,7 @@ def format_medium(overall_concerns, ww_summary, ed_summary, hosp_summary, date_i
         ww = ww_summary[virus]
         if ww["concern"] != "Low":
             ww_display_order = ["Very Low", "Low", "Moderate", "High", "Very High"]
-            ww_vals = [ww[st] for st in ["DC", "MD", "VA"] if ww[st]]
+            ww_vals = [ww[st] for st in STATE_ABBREVS if ww.get(st)]
             unique = sorted(set(ww_vals), key=ww_display_order.index)
             if len(unique) == 1:
                 factors.append(f"wastewater {unique[0].lower()}")
@@ -526,11 +531,12 @@ def format_high(overall_concerns, ww_summary, ed_summary, hosp_summary, date_iso
 
         # Wastewater
         ww = ww_summary[virus]
-        ww_states = [ww[st] for st in ["DC", "MD", "VA"] if ww[st]]
-        if len(set(ww_states)) == 1:
-            lines.append(f"  Wastewater: {ww_states[0]} across DMV")
+        ww_levels = {st: ww[st] for st in STATE_ABBREVS if ww.get(st)}
+        if len(set(ww_levels.values())) == 1:
+            level = next(iter(ww_levels.values()))
+            lines.append(f"  Wastewater: {level} across the region")
         else:
-            state_str = ", ".join(f"{st} {ww[st]}" for st in ["DC", "MD", "VA"])
+            state_str = ", ".join(f"{st} {lvl}" for st, lvl in ww_levels.items())
             lines.append(f"  Wastewater: {state_str}")
 
         # ED visits
