@@ -6,7 +6,7 @@ As of 2026-04-04, all three sources report data through the week ending 2026-03-
 
 | Source | Diseases | Geography | What it measures | Freshness | Notes |
 |---|---|---|---|---|---|
-| Wastewater (NWSS) | COVID, Flu, RSV | State (DC, MD, VA) | Categorical activity level (Very Low–Very High) | Updated Fridays, ~5 day lag | Undocumented CDC endpoints; stable in practice |
+| Wastewater (NWSS) | COVID, Flu, RSV | State (DC, MD, VA) | Categorical activity level (Very Low–Very High) | Updated Wed/Thu, ~5 day lag | Undocumented CDC endpoint; migrated May 2026 |
 | ED Visits (NSSP) | COVID, Flu, RSV | County | % of ED visits + trend direction | Updated weekly, ~7 day lag | data.cdc.gov SODA API (Tyler Technologies/Socrata platform); can filter to specific DMV counties |
 | Hospital Admissions (NHSN) | COVID, Flu, RSV | State (DC, MD, VA) | Confirmed new admissions per 100k population | Updated weekly, ~7 day lag | data.cdc.gov SODA API (Tyler Technologies/Socrata platform) |
 
@@ -19,31 +19,33 @@ As of 2026-04-04, all three sources report data through the week ending 2026-03-
 
 ### CDC Wastewater Viral Activity Levels (NWSS)
 
-Undocumented JSON endpoints that power the CDC NWSS dashboard. Return state-by-state Wastewater Viral Activity Level (WVAL) categories: Very Low / Low / Moderate / High / Very High. Updated weekly on Fridays.
+A single undocumented JSON endpoint powers the CDC NWSS dashboard. Returns 159 rows (53 states × 3 pathogens) with Wastewater Viral Activity Level (WVAL) categories: Very Low / Low / Moderate / High / Very High. Updated weekly, observed Wed/Thu.
 
-| Virus | URL |
-|---|---|
-| COVID (SARS-CoV-2) | `https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/sc2/nwsssc2statemapDL.json` |
-| Influenza A | `https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/flua/nwssfluastatemapDL.json` |
-| RSV | `https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/rsv/nwssrsvstatemapDL.json` |
+URL: `https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/NWSS_WVAL_metric/NWSSWVALStateDatabites.json`
+
+Sibling files in the same directory (not currently used):
+- `NWSSWVALStateActivityLevel.json` — full history with regional/national rollups
+- `NWSSWVALSiteMap.json` — per-site detail
 
 Record schema:
 ```json
 {
   "State/Territory": "Alabama",
-  "State_Abbreviation": "AL",
-  "WVAL_Category": "Very Low",
-  "Number_of_Sites": "6",
-  "Time_Period": "March 15, 2026 - March 21, 2026",
-  "Coverage": null,
-  "date_updated": "2026-03-26T08:03:31.383805Z"
+  "State/Territory_WVAL_Category": "Very Low",
+  "Pathogen_Target": "SARS-CoV-2",
+  "Week_End": "2026-05-16",
+  "Date_Updated": "May 21, 2026 3:32 AM"
 }
 ```
 
+`Pathogen_Target` values: `"SARS-CoV-2"`, `"Influenza A virus"`, `"RSV"`.
+
 Notes:
-- Files have a UTF-8 BOM — use `resp.encoding = "utf-8-sig"` before calling `resp.json()`
-- The Bluesky bot `covid-wastewater.bsky.social` uses these same endpoints (source: https://github.com/EricWVGG/covid-wastewater-bluesky), suggesting they are stable enough for a weekly bot
-- These are undocumented internal CDC endpoints and could change without notice
+- File has a UTF-8 BOM — use `resp.encoding = "utf-8-sig"` before calling `resp.json()`
+- `Date_Updated` is a human-readable string with no timezone. `Week_End` is already YYYY-MM-DD.
+- Endpoint discovered via `data-config-url="/wastewater/modules/state-page-combined.json"` attribute on the dashboard widget at `cdc.gov/wastewater/respiratory-viruses/state.html`
+- This endpoint replaced the old per-pathogen `nwss{sc2,flua,rsv}statemapDL.json` files around 2026-05-07; those files kept returning HTTP 200 with frozen content (stuck at week ending May 2) but were no longer updated
+- Undocumented internal CDC endpoint — could change without notice; check the dashboard page's `data-config-url` if it goes stale again
 
 ### NSSP ED Visit Trajectories
 
@@ -91,7 +93,7 @@ Percent positivity from clinical lab testing, by HHS Region. Covers SARS-CoV-2, 
 
 ### data.cdc.gov — Combined Wastewater Dataset
 
-Dataset `atcp-73re` exists on data.cdc.gov but returns 403 — not publicly accessible.
+Dataset `atcp-73re` exists on data.cdc.gov but returns 403 — not publicly accessible. The successor Socrata dataset `j9g8-acpt` is public but contains raw sample measurements, not the WVAL categorical levels used by the dashboard.
 
 ### Bluesky Bot
 
