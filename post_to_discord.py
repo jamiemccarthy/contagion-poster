@@ -44,20 +44,29 @@ _location = _load_location()
 # Full state name → abbreviation, e.g. {"New Jersey": "NJ", ...}
 STATE_NAMES = _location["states"]
 STATE_ABBREVS = list(STATE_NAMES.values())
+SITE_IDS = set(_location.get("site_ids", []))
 
 # 2020 Census populations for the selected states, for hospital admission weighting
 STATE_POPULATIONS = {abbrev: US_STATE_POPULATIONS.get(abbrev, 0) for abbrev in STATE_ABBREVS}
 STATE_TOTAL_POP = sum(STATE_POPULATIONS.values())
 
-# Undocumented CDC endpoint for NWSS wastewater viral activity levels (WVAL).
-# Returns one row per state per pathogen — categorical levels
-# (Very Low / Low / Moderate / High / Very High). Wastewater is the earliest
-# signal — it detects community spread before people show up at hospitals.
-# This feed replaced the per-pathogen nwss{sc2,flua,rsv}statemap.json files
-# in May 2026; updates land Wed/Thu.
+# Undocumented CDC endpoint — per-site WVAL with Population_Served for weighting.
+# Same file used by setup_location.py; updates land Wed/Thu.
 WASTEWATER_URL = (
-    "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/NWSS_WVAL_metric/NWSSWVALStateDatabites.json"
+    "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/NWSS_WVAL_metric/NWSSWVALSiteMap.json"
 )
+
+# Ordinal scale for population-weighted averaging of categorical WVAL levels.
+# Weighted average is mapped back to a category at the midpoint between levels.
+_WVAL_TO_ORDINAL = {"Very Low": 1, "Low": 2, "Moderate": 3, "High": 4, "Very High": 5}
+_ORDINAL_BREAKPOINTS = [(1.5, "Very Low"), (2.5, "Low"), (3.5, "Moderate"), (4.5, "High")]
+
+
+def _ordinal_to_wval_category(x):
+    for threshold, label in _ORDINAL_BREAKPOINTS:
+        if x < threshold:
+            return label
+    return "Very High"
 
 # The new feed identifies pathogens by full name; map to our virus keys.
 WASTEWATER_PATHOGEN_MAP = {
@@ -216,29 +225,53 @@ def trend_direction(current, prior_3wk_avg):
 # ---------------------------------------------------------------------------
 
 def fetch_wastewater():
-    """Fetch wastewater viral activity levels for the configured states.
+    """Fetch wastewater viral activity levels for the configured sites.
 
-    The combined feed returns 53 states × 3 pathogens. We filter to states
-    from location.json, group by virus, and normalize the field names.
+    Uses NWSSWVALSiteMap.json (site-level) rather than NWSSWVALStateDatabites.json
+    (state-level). Filters to the site IDs selected by setup_location.py, then
+    computes a Population_Served-weighted average WVAL category per state per
+    pathogen. This reflects local conditions rather than the full-state average,
+    which matters most in large states where selected sites may be a small subset.
     """
     resp = requests.get(WASTEWATER_URL, timeout=15)
     resp.raise_for_status()
-    resp.encoding = "utf-8-sig"  # CDC files have a UTF-8 BOM
+    resp.encoding = "utf-8-sig"
     records = resp.json()
 
-    results = {virus: [] for virus in WASTEWATER_PATHOGEN_MAP.values()}
+    # Accumulate (population, ordinal_wval) pairs per virus per state
+    by_virus_state = defaultdict(lambda: defaultdict(list))
+    week_end = None
+
     for r in records:
+        if r.get("Site") not in SITE_IDS:
+            continue
         state_name = r.get("State/Territory")
         if state_name not in STATE_NAMES:
             continue
         virus = WASTEWATER_PATHOGEN_MAP.get(r.get("Pathogen_Target"))
         if not virus:
             continue
-        results[virus].append({
-            "State_Abbreviation": STATE_NAMES[state_name],
-            "WVAL_Category": r.get("State/Territory_WVAL_Category"),
-            "Week_End": r.get("Week_End"),
-        })
+        ordinal = _WVAL_TO_ORDINAL.get(r.get("Site_WVAL_Category"))
+        if ordinal is None:
+            continue
+        pop = int(r.get("Population_Served") or 0)
+        by_virus_state[virus][STATE_NAMES[state_name]].append((pop, ordinal))
+        if week_end is None:
+            week_end = r.get("Week_End")
+
+    results = {virus: [] for virus in WASTEWATER_PATHOGEN_MAP.values()}
+    for virus, states in by_virus_state.items():
+        for abbrev, site_data in states.items():
+            total_pop = sum(p for p, _ in site_data)
+            if total_pop > 0:
+                weighted = sum(p * o for p, o in site_data) / total_pop
+            else:
+                weighted = sum(o for _, o in site_data) / len(site_data)
+            results[virus].append({
+                "State_Abbreviation": abbrev,
+                "WVAL_Category": _ordinal_to_wval_category(weighted),
+                "Week_End": week_end,
+            })
     return results
 
 
