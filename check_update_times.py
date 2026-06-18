@@ -15,6 +15,7 @@ import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 
 RETRY_BASE = 10
@@ -27,16 +28,23 @@ FIELDNAMES = [
     "checked_at",
     "ww_rows_updated_at",
     "ww_week_end",
+    "sitemap_updated_at",
+    "sitemap_week_end",
     "ed_rows_updated_at",
     "ed_week_end",
+    "ed_http_last_modified",
     "hosp_final_rows_updated_at",
     "hosp_final_week_end",
+    "hosp_final_http_last_modified",
     "hosp_prelim_rows_updated_at",
     "hosp_prelim_week_end",
 ]
 
 WASTEWATER_URL = (
     "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/NWSS_WVAL_metric/NWSSWVALStateDatabites.json"
+)
+SITEMAP_URL = (
+    "https://www.cdc.gov/wcms/vizdata/NCEZID_DIDRI/NWSS_WVAL_metric/NWSSWVALSiteMap.json"
 )
 SOCRATA_META = "https://data.cdc.gov/api/views/{}.json"
 SOCRATA_DATA = "https://data.cdc.gov/resource/{}.json"
@@ -57,6 +65,19 @@ def fetch_json(url):
                 time.sleep(wait)
             else:
                 raise
+
+
+def fetch_last_modified(url):
+    """Return the Last-Modified response header for a URL as an ISO-8601 string, or ''."""
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            lm = r.headers.get("Last-Modified", "")
+        if not lm:
+            return ""
+        return parsedate_to_datetime(lm).astimezone(timezone.utc).isoformat()
+    except Exception:
+        return ""
 
 
 def unix_to_iso(ts):
@@ -82,15 +103,14 @@ def parse_wastewater_date_updated(s):
         return s
 
 
-def check_wastewater():
-    data = fetch_json(WASTEWATER_URL)
-    # Feed has 53 states x 3 pathogens for one week; all rows share Week_End
-    # and Date_Updated, so any row will do.
+def check_wastewater_json(url):
+    data = fetch_json(url)
+    # All rows share Week_End and Date_Updated, so any row will do.
     record = data[0] if data else {}
-    return {
-        "ww_rows_updated_at": parse_wastewater_date_updated(record.get("Date_Updated", "")),
-        "ww_week_end": record.get("Week_End", ""),
-    }
+    return (
+        parse_wastewater_date_updated(record.get("Date_Updated", "")),
+        record.get("Week_End", ""),
+    )
 
 
 def check_socrata_dataset(dataset_id, date_field):
@@ -109,20 +129,29 @@ def check_socrata_dataset(dataset_id, date_field):
 def main():
     checked_at = datetime.now(tz=timezone.utc).isoformat()
 
-    ww = check_wastewater()
+    ww_updated, ww_week_end = check_wastewater_json(WASTEWATER_URL)
+    sm_updated, sm_week_end = check_wastewater_json(SITEMAP_URL)
 
     ed_updated, ed_week_end = check_socrata_dataset("rdmq-nq56", "week_end")
+    ed_lm = fetch_last_modified(f"{SOCRATA_DATA.format('rdmq-nq56')}?$limit=1")
+
     hf_updated, hf_week_end = check_socrata_dataset("ua7e-t2fy", "weekendingdate")
+    hf_lm = fetch_last_modified(f"{SOCRATA_DATA.format('ua7e-t2fy')}?$limit=1")
+
     hp_updated, hp_week_end = check_socrata_dataset("mpgq-jmmr", "weekendingdate")
 
     row = {
         "checked_at": checked_at,
-        "ww_rows_updated_at": ww["ww_rows_updated_at"],
-        "ww_week_end": ww["ww_week_end"],
+        "ww_rows_updated_at": ww_updated,
+        "ww_week_end": ww_week_end,
+        "sitemap_updated_at": sm_updated,
+        "sitemap_week_end": sm_week_end,
         "ed_rows_updated_at": ed_updated,
         "ed_week_end": ed_week_end,
+        "ed_http_last_modified": ed_lm,
         "hosp_final_rows_updated_at": hf_updated,
         "hosp_final_week_end": hf_week_end,
+        "hosp_final_http_last_modified": hf_lm,
         "hosp_prelim_rows_updated_at": hp_updated,
         "hosp_prelim_week_end": hp_week_end,
     }

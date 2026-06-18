@@ -3,6 +3,9 @@ name: Poll CDC Update Times
 on:
   schedule:
     - cron: "0 */6 * * *"        # baseline every 6h at :00
+    - cron: "30 10-21 * * 4"     # hourly Thu 10:30–21:30 UTC
+    - cron: "30 10-21 * * 5"     # hourly Fri 10:30–21:30 UTC (wastewater, hosp final, ED all update ~13–17 UTC)
+    - cron: "30 7-22 * * 6"      # hourly Sat 07:30–22:30 UTC
   workflow_dispatch:
 
 concurrency:
