@@ -80,6 +80,8 @@ Once you've located the replacement:
 
 3. **Verify update cadence.** The new feed may publish on a different day or time than the old one. If we have schedule-sensitive code (cron jobs, posting workflows), check what day the new endpoint actually refreshes and whether downstream timing assumptions still hold. The polling log is the cleanest evidence here once a week or two has passed.
 
+   Also watch for **date-stamp lag**: some feeds embed a `Date_Updated` or similar field in their *content* that is set to a day before the file actually refreshes. The CDC wastewater JSON (NWSSWVALStateDatabites.json) does this — `Date_Updated` is stamped to Thursday, but the file typically updates on Friday. If our polling log shows changes detected Friday but `Date_Updated` says Thursday, trust the detection time, not the field.
+
 4. **Keep the old field/column names if you reasonably can.** If our database, CSV, or analytics pipeline has historical data under specific column names, preserving them across the migration makes longitudinal analysis painless. Parse/convert the new feed's values into the old shape rather than reshaping everything downstream.
 
 5. **Leave a breadcrumb for next time.** Write a project memory documenting: which endpoint was deprecated, which replaced it, schema differences, the date of the migration, and how you found the new one. The next time this happens (in the same project, with the same vendor, or both), you want to go straight to the productive step.
@@ -90,6 +92,21 @@ Once you've located the replacement:
 - **Don't add a "retry harder" loop in our code.** If the endpoint returns 200 with stale content, no amount of retrying will help. Retries are for transient failures, not for content staleness.
 - **Don't paper over it with a fallback to a different field.** If you find yourself writing "if `date_updated` is missing, fall back to `Date_Updated`, then fall back to parsing `Time_Period`" — stop. You've found the migration. Update the code to read the new schema cleanly.
 - **Don't claim "the source is just down" without checking the public dashboard.** That conclusion is only valid after you've confirmed the public-facing page is *also* showing the stale data.
+
+## Known update schedule for this project's CDC sources
+
+Established from `update_log.csv` polling (every 6h, May–June 2026). All times UTC.
+
+| Source | Field | Typical update day | Typical update time (UTC) | Eastern equivalent |
+|---|---|---|---|---|
+| Wastewater (NWSS) | `ww_rows_updated_at` | **Friday** | ~13:00–19:00 | ~9am–3pm ET |
+| Hospital final (NHSN) | `hosp_final_rows_updated_at` | **Thursday** | ~13:39–15:30 | ~9:40–11:30am ET |
+| ED visits (NSSP) | `ed_rows_updated_at` | **Thursday** | ~16:05–16:08 | ~noon ET (very consistent) |
+| Hospital prelim (NHSN) | `hosp_prelim_rows_updated_at` | **Wednesday** | ~14:00–15:45 | ~10–11:45am ET |
+
+**Important caveat on wastewater:** The `Date_Updated` field inside NWSSWVALStateDatabites.json is stamped to Thursday, but the file is actually detected as changed by our Friday polls. The poster runs Friday at 16:00 UTC — this means the wastewater data may or may not have refreshed yet when the poster fires, depending on whether CDC updates before or after 16:00 UTC. The 6h polling resolution can't resolve this more precisely.
+
+If wastewater looks stale when the poster runs (week_end not advancing week-over-week), check whether this is a true delay vs. the poster simply running before the Friday file update. The other three sources (hospital final, ED, hospital prelim) should always be fresh by Friday 16:00 UTC since they update Thursday or earlier.
 
 ## Why this skill exists
 
